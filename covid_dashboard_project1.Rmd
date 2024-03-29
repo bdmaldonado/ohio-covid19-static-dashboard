@@ -1,0 +1,400 @@
+---
+title: "STA 404 Project 1: Ohio COVID Dashboard"
+output: html_notebook
+---
+Author: Ben Maldonado <br>
+Date updated: 4/7/21<br>
+
+References: <br><i> all of the following references are links to code with brief analysis on why they were used</i><br>
+1. http://www.sthda.com/english/wiki/ggplot2-title-main-axis-and-legend-titles - <i>helped with centering titles</i><br>
+2. https://stackoverflow.com/questions/35090883/remove-all-of-x-axis-labels-in-ggplot - <i>helped with creating proper themes</i><br>
+3. https://felixfan.github.io/ggplot2-remove-grid-background-margin/ - <i>helped with creating proper themes</i><br>
+4. http://www.sthda.com/english/wiki/ggplot2-themes-and-background-colors-the-3-elements - <i>helped with creating proper themes</i><br>
+5. https://stackoverflow.com/questions/40675778/center-plot-title-in-ggplot2 - <i>helped with centering titles</i><br>
+6. https://emanuelaf.github.io/own-ggplot-theme.html - <i>helped with creating themes</i><br>
+7. https://stackoverflow.com/questions/22945651/how-to-remove-space-between-axis-area-plot-in-ggplot2 - <i>helped with recreating spacing</i><br>
+8. https://stackoverflow.com/questions/31568453/using-different-font-styles-in-annotate-ggplot2 - <i>helped with changing to bold font</i><br>
+9. # https://www.geeksforgeeks.org/convert-first-letter-of-every-word-to-uppercase-in-r-programming-str_to_title-function/#:~:text=str_to_title()%20Function%20in%20R,are%20converted%20to%20lower%20case. - <i>helped with inner joins on the map dataset</i><br>
+10. https://www.r-bloggers.com/2018/08/how-to-cite-packages/ - <i>citation help</i><br>
+11. https://patchwork.data-imaginist.com/articles/guides/annotation.html - <i>help with patchwork</i><br>
+12. https://r-graphics.org/recipe-bar-graph-adjust-width - <i>helped with bar thickness on bar charts</i><br>
+13. https://stackoverflow.com/questions/29465941/format-number-in-r-with-both-comma-thousands-separator-and-specified-decimals - <i>helped with formatting numbers with commas</i><br>
+14. https://ggplot2.tidyverse.org/reference/geom_text.html - <i>helped with properly placing the geom_text values</i><br>
+<br><br>
+Citations: <br>
+<i>Dataset aggregation and graphic creation was done using R 4.0.4 (R Core Team, 2021) and the tidyverse (v1.3.0; Wickham et al., (2019), patchwork (v1.1.1; Pederson (2020)), ggmap (v3.0.0; D. Kahle and H. Wickham. (2019)) packages. Some more minor packages included lubridate, mapproj, stringr, and formattable. Full code is down below.</i><br>
+<br><br>
+Datesets:<br>
+1. OhioDF - the Ohio COVID-19 Dataset (https://coronavirus.ohio.gov/static/dashboards/COVIDDeathData_CountyOfResidence.csv)<br>
+2. OhioDF_clean - removed unnecessary columns from the raw data<br>
+3. OhioDF_cases_agg - aggregates all case counts for each day<br>
+4. OhioDF_hosp_agg - aggregates all hospitalizations counts for each day<br>
+5. OhioDF_deaths_agg - aggregates all death counts for each day<br>
+6. OhioDF_agg - combines all of the aggregate datasets<br>
+7. OhioDF_county_cases - aggregates of case counts on the county level<br>
+8. OhioDF_county_hosp - aggregates of hospitalization counts on the county level<br>
+9. OhioDF_county_deaths - aggregates of deaths counts on the county level<br>
+10. OhioDF_county - combines all county-level data together<br>
+11. OhioDF_top20 - only selects the top 20 case count-counties<br>
+12. County_map - a map of all US counties<br>
+13. Ohio_map - isolates the county maps down to just Ohio<br>
+14. Ohio_map_clean - prepares the county dataset for merging<br>
+15. OhioDF_map - joins the aggregate counts by county level to the map data<br>
+```{r libraries, results=FALSE}
+library(tidyverse) # used for dataset operations
+library(patchwork) # used for creating final dashboard
+library(lubridate) # used for proper date objects
+library(ggmap) # used for creating the ohio map
+library(mapproj) # used for creating the ohio map
+library(stringr) # used for joining the ohio map data with case data
+library(formattable) # used for printing numbers with commas
+```
+<h2>Load the dataset and format it correctly</h2>
+```{r covid-load}
+# this block focuses on loading in the initial dataset
+
+# load in the dataset and change their column names and types to be more readable
+OhioDF <- read_csv(
+  file="https://coronavirus.ohio.gov/static/dashboards/COVIDDeathData_CountyOfResidence.csv",
+  col_names = c("County","Sex","AgeRange","cOnsetDate","cHospDate",
+                "cDeathDate","CaseCount","HospCount",
+                "DeathCount"), # fix names of the columns
+  col_types = "cccccciii", # fix the datatypes
+  skip=1) # skip the title line
+
+
+# check out the dataset
+# view(OhioDF)
+# names(OhioDF)
+
+
+# gets rid of the AgeRange and Sex variables
+OhioDF_clean <- OhioDF %>%
+  filter(County != "Unknown") %>% # get rid of the random unknown county
+  # SOLUTION PULLED FROM DR. BAILER
+   mutate(OnsetDate = ymd(cOnsetDate),
+         HospDate = ymd(cHospDate),
+         DeathDate = ymd(cDeathDate)) %>% # correct the format of the improper variables
+  select(County, OnsetDate, HospDate, DeathDate, CaseCount, HospCount, DeathCount)
+
+# check out the dataset
+# view(OhioDF_clean)
+# str(OhioDF_clean)
+
+# FOR NOTES:
+# onset date -> cases; admission date -> hospitalized count
+# date of death -> death count
+```
+<h2>Aggregate Time-Series plots</h2>
+```{r covid-agg-datasets}
+# this block is meant to build the datasets for the aggregate time series charts
+
+# cases dataset
+OhioDF_cases_agg <- OhioDF_clean %>%
+  mutate(Date = OnsetDate) %>% # give something for the innerjoin 
+  group_by(Date) %>%
+  summarize(Cases=sum(CaseCount)) # aggregate the case counts
+
+
+# hosp dataset
+firstCase <- min(OhioDF_clean$OnsetDate, na.rm=TRUE) # define the first case to fix some of the broken dates
+
+OhioDF_hosp_agg <- OhioDF_clean %>%
+  mutate(Date=HospDate) %>% # give something for inner join
+  group_by(Date) %>%
+  summarize(Hosps=sum(HospCount)) %>% # aggregate the hosp counts
+  filter(Date>=firstCase)
+
+
+# death dataset
+OhioDF_deaths_agg <- OhioDF_clean %>%
+  mutate(Date = DeathDate) %>% # give something for the inner join 
+  group_by(Date) %>%
+  summarize(Deaths=sum(DeathCount)) # aggregate the deaths count
+
+
+# aggregate dataset of all of the above datasets
+OhioDF_agg <- OhioDF_cases_agg %>%
+  inner_join(OhioDF_hosp_agg) %>%
+  inner_join(OhioDF_deaths_agg) %>%
+  filter(!is.na(Date)) #get rid of empty dates
+
+# verify the dataset is right
+# view(OhioDF_agg)
+
+# maximum counts
+total_cases = as.numeric(max(cumsum(OhioDF_agg$Cases))) # collect highest counts; these have to be coerced into a value
+total_hosp = as.numeric(max(cumsum(OhioDF_agg$Hosps)))
+total_deaths = as.numeric(max(cumsum(OhioDF_agg$Deaths)))
+```
+
+```{r covid-theme-agg} 
+# this block is meant to create a cohesive theme for the timeseries plots
+theme_covid_ohio_agg <- function() {
+  theme(axis.text.x=element_text(color="black", size=10), # correct x text to be the correct size
+        axis.title.x=element_blank(), # get rid of x label
+        axis.text.y=element_blank(), # get rid of y texts
+        axis.title.y=element_blank(), # get rid of y label
+        axis.ticks.y=element_blank(), # get rid of y ticks
+        panel.grid.major = element_blank(),  # get rid of the grid lines
+        panel.grid.minor = element_blank(), # get rid of the grid lines
+        panel.background=element_rect(fill = "#dce8f2") # color the background
+  )
+}
+```
+
+```{r covid-agg-plots}
+# this block is meant to create the various plots for the timeseries data
+
+# cases plot
+cases_agg <- ggplot(OhioDF_agg, aes(x=Date, y=Cases))+
+  geom_rect(xmin=today()-14, xmax=today()+15, ymin=0, ymax=11750, fill="#d4d4d4")+ # grey bar for "preliminary cases"
+  annotate(geom="text",x=today()-55, y=12750,label="*Preliminary", size=4, hjust=0) + # label for "preliminary cases"
+  annotate(geom="text",x=today()-275, y=11500,label="Cases", size=8) + # marks the label for this graph (cases)
+  annotate(geom="text",x=today()-275, y=9000,label=comma(total_cases, digits=0), size=12, color="#873b4b", fontface=2) + # marks the total number of cases in ohio; the comma() function places the value on the graphic with commas at the proper notation points (digits=0 means that we won't have any decimal points)
+  scale_x_date(limits=c(as.Date("2020-03-01"),today()+20), date_breaks = "3 months", date_labels="%b %d, %y", expand = c(0,.75))+ # sets the proper scaling on the bottom of the graphic to match the covid dashboard
+  geom_col(fill="#507aa8", width=1)+ # cases timeseries; fix the width of the bars so there aren't weird gaps
+  theme_covid_ohio_agg() # proper theme
+
+
+# hospitalizations plot
+hosp_agg <- ggplot(OhioDF_agg, aes(x=Date, y=Hosps))+
+  geom_rect(xmin=today()-14, xmax=today()+15, ymin=0, ymax=360, fill="#d4d4d4")+ # grey bar for "preliminary cases"
+  annotate(geom="text",x=today()-55, y=387,label="*Preliminary", size=4, hjust=0) + # label for "preliminary cases"
+  annotate(geom="text",x=today()-275, y=360,label="Hospitalizations", size=8) + # marks the label for this graph (hospitalizations)
+  annotate(geom="text",x=today()-275, y=285,label=comma(total_hosp, digits=0), size=12, color="#873b4b", fontface=2) + # marks the total number of hospitalizations in ohio
+  scale_x_date(limits=c(as.Date("2020-03-01"), today()+20), date_breaks = "3 months", date_labels="%b %d, %y", expand = c(0,.75))+ # sets the proper scaling on the bottom of the graphic to match the covid dashboard
+  geom_col(fill="#507aa8", width=1)+ # hospitalizations timeseries
+  theme_covid_ohio_agg() # proper theme
+
+
+# deaths plot
+deaths_agg <- ggplot(OhioDF_agg, aes(x=Date, y=Deaths))+
+  geom_rect(xmin=today()-14, xmax=today()+15, ymin=0, ymax=185, fill="#d4d4d4")+ # grey bar for "preliminary cases"
+  annotate(geom="text",x=today()-55, y=200,label="*Preliminary", size=4, hjust=0) + # label for "preliminary cases"
+  annotate(geom="text",x=today()-275, y=180,label="Deaths", size=8) + # marks the label for this graph (deaths)
+  annotate(geom="text",x=today()-275, y=143,label=comma(total_deaths, digits=0), size=12, color="#873b4b", fontface=2) + # aggregate death count in ohio
+  scale_x_date(limits=c(as.Date("2020-03-01"),today()+20), date_breaks = "3 months", date_labels="%b %d, %y",expand = c(0,.75))+ # sets the proper scaling on the bottom of the graphic to match the covid dashboard
+  geom_col(fill="#507aa8", width=1)+ # deaths timeseries
+  theme_covid_ohio_agg() # proper theme
+
+
+# show these off for the notebook
+cases_agg
+hosp_agg
+deaths_agg
+```
+
+<h2>County-level Plots</h2>
+```{r county-data}
+# this block is meant to create the datasets for the county level counts of cases, hospitalizations, and deaths
+
+# cases dataset
+OhioDF_county_cases <- OhioDF_clean %>%
+  filter(!is.na(OnsetDate)) %>% # remove na onset dates
+  group_by(County, OnsetDate) %>% # group by the County and dates
+  summarize(Cases=sum(CaseCount)) %>% # count up the cases for each date
+  mutate(TotalCases=cumsum(Cases)) %>% # total up all of the cases for this county on a particular day
+  filter(OnsetDate == max(OnsetDate)) %>% # select only the newest day
+  select(-c(OnsetDate, Cases)) # drop the unnecessary columns
+
+
+# hosps dataset
+OhioDF_county_hosp <- OhioDF_clean %>%
+  filter(!is.na(HospDate)) %>% # remove na hosp dates
+  group_by(County, HospDate) %>% # group by the County and dates
+  summarize(Hosps=sum(HospCount)) %>% # count up the cases for each date
+  mutate(TotalHosp=cumsum(Hosps)) %>% # total up all of the cases for this county on a particular day
+  filter(HospDate == max(HospDate)) %>% # select only the newest day
+  select(-c(HospDate, Hosps)) # drop the unnecessary columns
+
+
+# death dataset
+OhioDF_county_deaths <- OhioDF_clean %>%
+  filter(!is.na(DeathDate)) %>% # remove na onset dates
+  group_by(County, DeathDate) %>% # group by the County and dates
+  summarize(Deaths=sum(DeathCount)) %>% # count up the cases for each date
+  mutate(TotalDeaths=cumsum(Deaths)) %>% # total up all of the cases for this county on a particular day
+  filter(DeathDate == max(DeathDate)) %>% # select only the newest day
+  select(-c(DeathDate, Deaths)) # drop the unnecessary datapoints
+
+
+# proper order on cases
+oo <- order(OhioDF_county_cases$TotalCases, decreasing=TRUE) # orders the cases in decreasing order from most to least
+top20 <- as.vector(OhioDF_county_cases$County[oo])[1:20] # choose the top 20 counties
+
+
+# aggregate dataset
+OhioDF_county <-OhioDF_county_cases %>%
+  inner_join(OhioDF_county_deaths) %>%
+  inner_join(OhioDF_county_hosp) %>%
+  mutate(CaseCat = cut(TotalCases, breaks = c(0, 1000, 2500, 5000, 
+                                  15000, 30000, 50000, 
+                                  100000, 1000000)),
+         # the CaseCat is for both the bar graphs and the map, so it has more categories
+         HospCat = cut(TotalHosp, breaks = c(0, 500, 750, 1500, 
+                                             3000, 5000, 10000)),
+         # JUST for the bar graphs
+         DeathCat = cut(TotalDeaths, breaks= c(0, 50, 100, 250, 
+                                               500, 750, 1000,
+                                               2000, 3000)))
+        # JUST for the bar graphs
+# create the category that breaks the counts of cases into various categories for coloring 
+
+# get rid of the 20 counties we don't need
+OhioDF_top20 <- OhioDF_county %>%
+  filter(County %in% top20)
+```
+
+```{r covid-color-scheme}
+# this block of code creates color maps for the bar graphs and map
+
+# selects colors that are dark blue to grey
+colors = c("#2a5783", "#507aa8", "#6c96bc", "#74a5cc", "#96c4e2", 
+                 "#b0d2e3", "#bed4dd", "#cbd6d7") # these will need to be manually listed in the bar graphs for proper coloring to occur
+bar_colors = c("#b0d2e3", "#96c4e2", "#74a5cc", 
+               "#6c96bc", "#507aa8", "#2a5783")
+map_colors = rev(colors) # map goes other direction for whatever reason
+```
+
+
+```{r covid-county-plots}
+# this block of code is meant to create the bar graphs of the county level data
+
+# case plot
+cases_bar <- ggplot(OhioDF_top20, aes(x=TotalCases, y=fct_reorder(County,TotalCases), fill=CaseCat)) + # orders the y axis based on the highest number of cases 
+  geom_col(width=.6) + # plot the county data
+  geom_text(aes(label=comma(TotalCases, digits=0), hjust=0),
+            nudge_y=.1, nudge_x=1000) + # label the county data; put proper commas in the labels; the slight nudge means they align properly with the bars
+  labs(title="Case Count")+ # add a title
+  guides(fill="none")+ # get rid of the legend
+  scale_fill_manual(values=bar_colors[2:6]) + # puts in the color schemes we looked at before; we only want the last 5 colors
+  scale_x_continuous(expand=c(0,0), limits=c(0,139000)) + # makes sure that gaps at ends of graphic are good by getting rid of padding and setting the right limit to be far enough to read the text properly
+  theme(
+        axis.text.x = element_blank(), # get rid of the x text
+        axis.title.x = element_blank(), # get rid of the x axis label
+        axis.ticks.x = element_blank(), # get rid of the x ticks
+        axis.title.y=element_blank(), # get rid y axis label
+        panel.grid.major = element_blank(), # gets rid of grid lines
+        panel.grid.minor = element_blank(),
+        panel.background=element_rect(fill = "#dce8f2"), # proper background color
+        plot.title = element_text(hjust=.5) # center the title
+  )
+
+# hosp
+hosp_bar <- ggplot(OhioDF_top20, aes(x=TotalHosp, y=fct_reorder(County,TotalCases), fill=HospCat)) +
+  # orders the y axis based on the highest number of cases (even though this is not the cases bar graph)
+  geom_col(width=.6)+ # plot the county data
+  geom_text(aes(label=comma(TotalHosp, digits=0), hjust=0),
+            nudge_y=.1, nudge_x=50) + # label the county data
+  labs(title="Hospitalization Count")+ # add a title
+  guides(fill="none")+ # get rid of the legend
+  scale_fill_manual(values=bar_colors) + # puts in the color schemes we looked at before
+  scale_x_continuous(expand=c(0,0), limits=c(0,6415)) + # makes sure that gaps at ends of graphic are good by getting rid of padding and setting the right limit to be far enough to read the text properly
+  theme(
+        axis.text.y = element_blank(), # get rid of county labels
+        axis.text.x = element_blank(), # get rid of x text
+        axis.title.x = element_blank(), # get rid of x axis title
+        axis.ticks.x = element_blank(), # get rid of x ticks
+        axis.title.y=element_blank(), # get rid of y title
+        panel.grid.major = element_blank(), # get rid of grid lines
+        panel.grid.minor = element_blank(),
+        panel.background=element_rect(fill = "#dce8f2"), # proper background color (light blue)
+        plot.title = element_text(hjust=.5) # center the title
+  )
+  
+  
+
+# deaths
+# this graphic follows the same rules as the one above, only for the death counts instead of the hospitalization counts
+deaths_bar <- ggplot(OhioDF_top20, aes(x=TotalDeaths, y=fct_reorder(County,TotalCases), fill=DeathCat)) +
+  geom_col(width=.6)+
+  geom_text(aes(label=comma(TotalDeaths, digits=0), hjust=0),
+            nudge_y=.1, nudge_x=20) +
+  labs(title="Death Count")+
+  guides(fill="none")+
+  scale_fill_manual(values=bar_colors) +
+  scale_x_continuous(expand=c(0,0), limits=c(0,2250)) + # makes sure that gaps at ends of graphic are good by getting rid of padding and setting the right limit to be far enough to read the text properly
+  theme(
+    # this follows the same theme format as the graphic above
+        axis.text.y = element_blank(),
+        axis.text.x = element_blank(),
+        axis.title.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.title.y=element_blank(),
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        panel.background=element_rect(fill = "#dce8f2"),
+        plot.title = element_text(hjust=.5)
+  )
+
+
+# show off the plots for the notebook
+cases_bar
+hosp_bar
+deaths_bar
+```
+
+<h2>Ohio COVID Map</h2>
+```{r covid-ohio-map}
+# this code block is meant to display the Ohio map, colored by county along the same scale that the bar graphs were colored
+
+County_map <- map_data('county')# snags the map data for US counties
+Ohio_map <- subset(County_map, region=="ohio") # isolates them to Ohio
+Ohio_map_clean <- Ohio_map %>% # fixes the variable for a join
+  mutate(County = str_to_title(subregion))
+
+OhioDF_map <- Ohio_map_clean %>% # joins the map data with the county level aggregate data from before
+  left_join(OhioDF_county)
+
+# map the ohio data with the correct color filling
+covid_map <- ggplot(OhioDF_map, aes(x=long,y=lat,group=group,fill=CaseCat)) + 
+  geom_polygon(color="black") + # draw the map with proper borders
+  guides(fill='none') + # get rid of guide
+  scale_fill_manual(values=map_colors) +
+  theme(
+    # match theme with the other graphics above
+        axis.text.y = element_blank(),
+        axis.text.x = element_blank(),
+        axis.title.y=element_blank(),
+        axis.title.x = element_blank(),
+        axis.ticks.y = element_blank(),
+        axis.ticks.x = element_blank(),
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        panel.background=element_rect(fill = "#dce8f2"),
+  )
+
+# show off for the notebook
+covid_map
+```
+<h2>Final Dashboard Product</h2>
+```{r final-dashboard, fig.width=16, fig.height=18}
+# the dashboard has two distinct halves: in the upper half, there is the map, which is lined with the 3 timeseries plots next to it
+# the bottom half of the graphic is made up of the bar charts
+timeseries <- cases_agg / hosp_agg / deaths_agg
+bars <- cases_bar | hosp_bar | deaths_bar
+
+
+dashboard <- ((covid_map | timeseries) / bars)
+# the dashboard works by placing the map next to 3 stacked timeseries on top of 3 bar graphs next to each other
+
+dashboard + plot_annotation(
+  title="COVID-19 Ohio Dashboard",
+  subtitle="Date retrieved: 4/7/21",
+  caption="Source: Ohio COVID-19 Dataset; citation found at top of document"
+)
+```
+
+<br><br>
+<h2>How this graphic was created</h2>
+The above graphic consists of 5 main graphics that come from one dataset. The process of creating thme is complex, but here are the steps:<br>
+1. Retrieve the dataset and get rid of the "Unknown" county; it was added in for when some data was not being fully collected, and does not fit within the context of our graphic.<br>
+2. Break the data into two sets: first, we will create an aggregate dataset, then a county-level dataset.<br>
+    a.) <b>Aggregate Dataset:</b> First, we group each of the counts by date, and then begin to sum up each of the various counts on those dates. This must happen because the Ohio COVID-19 dataset splits the information into categories, so different age ranges on the same date will have different entries in the dataset. Once they have been summed accross the day, you can then join the datasets for cases, hospitalizations, and deaths together into one dataset. (This is not necessary, but it assists for ease of graphic creation later)<br>
+    b.) <b>County-level Dataset:</b> We will be grouping by county THEN date, and, similar to the above dataset, add across the various counts for each day. Once we have done this, we will collect the cumulative sum for each county so that we end up with the most recent counts of the total number of deaths, etc, for each county. Then, join the various datasets together by county (this does not need to be done once again).<br>
+3. Once the data has been created, we can proceed to creating the graphics:<br>
+    a.) <b>Time series:</b> With our timeseries data, create three bar charts with date of the x-axis and counts on the y-axis (one for cases, one for hopsitalizations, and one for deaths).<br>
+    b.) <b>Bar Charts:</b>Using the county-level data, select the top 20 counties based on their highest case counts. Create three bar charts with the counts on the x-axis and the county on the y-axis, ordered by that same comparison of who has the higher case counts (this also includes the ones that are NOT about cases, such as deaths; it is meant to maintain order across all three graphics). Remove the y axis labels from the hospitalizations and deaths graphics, as they will follow the same y axis as the first cases graphics.<br>
+    c.) <b>COVID Ohio Map</b>: Grab data on the coordinates of the various Ohio counties using the ggmap library. Once this has been done, transform the column of that dataset that includes the Ohio county names to match the county level data in both column name and formatting of the county names. Once this is done, join the two datasets together and graph them: the x-axis will be latitude, y-axis will be longitude, group will be group (so that the counties match up properly), and the fill will be based on the case counts of each county.<br>
+4. Finally, put these graphics all together in the proper order: the Ohio map graphic next to all three time series graphs stacked on top of each other, and all of that over the three bar charts laid side-by-side. Ensure that the map and bar charts have a similar grey-to-navy color scale, where the more navy there is, the more cases there are. 
